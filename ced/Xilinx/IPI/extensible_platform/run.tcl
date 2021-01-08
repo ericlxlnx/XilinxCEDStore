@@ -23,9 +23,9 @@ proc createDesign {design_name options} {
 # Procedure to create entire design; Provide argument to make
 # procedure reusable. If parentCell is "", will use root.
 
-proc create_root_design { parentCell design_name temp_options} {
+proc create_root_design { parentCell design_name temp_options clk_options} {
 
-# puts "creat_root_desing"
+# puts "create_root_design"
 set board_part [get_property NAME [current_board_part]]
 set board_name [get_property BOARD_NAME [current_board]]
 set fpga_part [get_property PART_NAME [current_board_part]]
@@ -569,6 +569,27 @@ puts "INFO: $fpga_part is selected"
    CONFIG.ASSOCIATED_BUSIF {S07_AXI} \
  ] [get_bd_pins /axi_noc_master/aclk8]
 
+set clk_freqs [ list 100.000 150.000 300.000 100.000 100.000 100.000 100.000 ]
+set clk_used [list true false false false false false false ]
+set clk_ports [list clk_out1 clk_out2 clk_out3 clk_out4 clk_out5 clk_out6 clk_out7 ]
+set default_clk_port clk_out1
+set default_clk_num 0
+
+set i 0
+set clocks {}
+foreach { port freq id is_default } $clk_options {
+    lset clk_ports $i $port
+    lset clk_freqs $i $freq
+    lset clk_used $i true
+    if { $is_default } {
+      set default_clk_port $port
+      set default_clk_num $i
+    }
+    dict append clocks clk_out$i { id $id is_default $is_default proc_sys_reset "proc_sys_reset$i" status "fixed" }
+    incr i
+}
+set num_clks $i
+
   # Create instance: clk_wizard_0, and set properties
   set clk_wizard_0 [ create_bd_cell -type ip -vlnv xilinx.com:ip:clk_wizard clk_wizard_0 ]
   set_property -dict [ list \
@@ -577,11 +598,11 @@ puts "INFO: $fpga_part is selected"
    CONFIG.CLKOUT_DRIVES {BUFG,BUFG,BUFG,BUFG,BUFG,BUFG,BUFG} \
    CONFIG.CLKOUT_DYN_PS {None,None,None,None,None,None,None} \
    CONFIG.CLKOUT_MATCHED_ROUTING {false,false,false,false,false,false,false} \
-   CONFIG.CLKOUT_PORT {clk_out1,clk_out2,clk_out3,clk_out4,clk_out5,clk_out6,clk_out7} \
+   CONFIG.CLKOUT_PORT [join $clk_ports ","] \
    CONFIG.CLKOUT_REQUESTED_DUTY_CYCLE {50.000,50.000,50.000,50.000,50.000,50.000,50.000} \
-   CONFIG.CLKOUT_REQUESTED_OUT_FREQUENCY {100.000,150,300,100.000,100.000,100.000,100.000} \
+   CONFIG.CLKOUT_REQUESTED_OUT_FREQUENCY [join $clk_freqs ","] \
    CONFIG.CLKOUT_REQUESTED_PHASE {0.000,0.000,0.000,0.000,0.000,0.000,0.000} \
-   CONFIG.CLKOUT_USED {true,true,true,false,false,false,false} \
+   CONFIG.CLKOUT_USED [join $clk_used "," ]\
    CONFIG.JITTER_SEL {Min_O_Jitter} \
    CONFIG.RESET_TYPE {ACTIVE_LOW} \
    CONFIG.USE_LOCKED {true} \
@@ -589,14 +610,10 @@ puts "INFO: $fpga_part is selected"
    CONFIG.USE_RESET {true} \
  ] $clk_wizard_0
 
-  # Create instance: proc_sys_reset_0, and set properties
-  set proc_sys_reset_0 [ create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset proc_sys_reset_0 ]
-
-  # Create instance: proc_sys_reset_1, and set properties
-  set proc_sys_reset_1 [ create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset proc_sys_reset_1 ]
-
-  # Create instance: proc_sys_reset_2, and set properties
-  set proc_sys_reset_2 [ create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset proc_sys_reset_2 ]
+for {set i 0} {$i < $num_clks} {incr i} {
+  # Create instance: proc_sys_reset_N, and set properties
+  set proc_sys_reset_$i [ create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset proc_sys_reset_$i ]
+}
 
   # Create instance: smartconnect_1, and set properties
   set smartconnect_1 [ create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect smartconnect_1 ]
@@ -623,7 +640,13 @@ puts "INFO: $fpga_part is selected"
 
   # Create port connections
   connect_bd_net -net CIPS_0_pl_clk0 [get_bd_pins CIPS_0/pl0_ref_clk] [get_bd_pins clk_wizard_0/clk_in1]
-  connect_bd_net -net CIPS_0_pl_resetn1 [get_bd_pins CIPS_0/pl0_resetn] [get_bd_pins clk_wizard_0/resetn] [get_bd_pins proc_sys_reset_0/ext_reset_in] [get_bd_pins proc_sys_reset_1/ext_reset_in] [get_bd_pins proc_sys_reset_2/ext_reset_in]
+
+  connect_bd_net -net CIPS_0_pl_resetn1 [get_bd_pins CIPS_0/pl0_resetn] [get_bd_pins clk_wizard_0/resetn]
+
+  for {set i 0} {$i < $num_clks} {incr i} {
+    connect_bd_net -net CIPS_0_pl_resetn1 [get_bd_pins proc_sys_reset_$i/ext_reset_in]
+  }
+
   connect_bd_net -net CIPS_0_ps_pmc_noc_axi0_clk [get_bd_pins CIPS_0/pmc_axi_noc_axi0_clk] [get_bd_pins axi_noc_master/aclk8]
   connect_bd_net -net CIPS_0_ps_ps_noc_cci_axi0_clk [get_bd_pins CIPS_0/fpd_cci_noc_axi0_clk] [get_bd_pins axi_noc_master/aclk1]
   connect_bd_net -net CIPS_0_ps_ps_noc_cci_axi1_clk [get_bd_pins CIPS_0/fpd_cci_noc_axi1_clk] [get_bd_pins axi_noc_master/aclk2]
@@ -633,11 +656,22 @@ puts "INFO: $fpga_part is selected"
   connect_bd_net -net CIPS_0_ps_ps_noc_nci_axi1_clk [get_bd_pins CIPS_0/fpd_axi_noc_axi1_clk] [get_bd_pins axi_noc_master/aclk6]
   connect_bd_net -net CIPS_0_ps_ps_noc_rpu_axi0_clk [get_bd_pins CIPS_0/lpd_axi_noc_clk] [get_bd_pins axi_noc_master/aclk7]
   connect_bd_net -net axi_intc_0_irq [get_bd_pins CIPS_0/pl_ps_irq0] [get_bd_pins axi_intc_0/irq]
-  connect_bd_net -net clk_wizard_0_clk_out1 [get_bd_pins CIPS_0/m_axi_fpd_aclk] [get_bd_pins axi_intc_0/s_axi_aclk] [get_bd_pins axi_noc_master/aclk0] [get_bd_pins clk_wizard_0/clk_out1] [get_bd_pins proc_sys_reset_0/slowest_sync_clk] [get_bd_pins smartconnect_1/aclk] [get_bd_pins smartconnect_1/aclk1]
-  connect_bd_net -net clk_wizard_0_clk_out2 [get_bd_pins clk_wizard_0/clk_out2] [get_bd_pins proc_sys_reset_1/slowest_sync_clk]
-  connect_bd_net -net clk_wizard_0_clk_out3 [get_bd_pins clk_wizard_0/clk_out3] [get_bd_pins proc_sys_reset_2/slowest_sync_clk]
-  connect_bd_net -net clk_wizard_0_locked [get_bd_pins clk_wizard_0/locked] [get_bd_pins proc_sys_reset_0/dcm_locked] [get_bd_pins proc_sys_reset_1/dcm_locked] [get_bd_pins proc_sys_reset_2/dcm_locked]
-  connect_bd_net -net proc_sys_reset_0_peripheral_aresetn [get_bd_pins axi_intc_0/s_axi_aresetn] [get_bd_pins proc_sys_reset_0/peripheral_aresetn] [get_bd_pins smartconnect_1/aresetn]
+
+  set default_clock_net clk_wizard_0_$default_clk_port
+
+  connect_bd_net -net $default_clock_net [get_bd_pins CIPS_0/m_axi_fpd_aclk] [get_bd_pins axi_intc_0/s_axi_aclk] [get_bd_pins axi_noc_master/aclk0] [get_bd_pins smartconnect_1/aclk] [get_bd_pins smartconnect_1/aclk1]
+
+  for {set i 0} {$i < $num_clks} {incr i} {
+    set port [lindex $clk_ports $i]
+    connect_bd_net -net clk_wizard_0_$port [get_bd_pins clk_wizard_0/$port] [get_bd_pins proc_sys_reset_$i/slowest_sync_clk]
+}
+
+  connect_bd_net -net clk_wizard_0_locked [get_bd_pins clk_wizard_0/locked]
+  for {set i 0} {$i < $num_clks} {incr i} {
+    connect_bd_net -net clk_wizard_0_locked [get_bd_pins proc_sys_reset_$i/dcm_locked] 
+  }
+
+  connect_bd_net -net proc_sys_reset_${default_clk_num}_peripheral_aresetn [get_bd_pins axi_intc_0/s_axi_aresetn] [get_bd_pins proc_sys_reset_${default_clk_num}/peripheral_aresetn] [get_bd_pins smartconnect_1/aresetn]
 
 if [regexp "vck" $board_name] {
 
@@ -674,8 +708,15 @@ set_property -dict [list CONFIG.ASSOCIATED_BUSIF {M00_AXI}] [get_bd_pins /axi_no
 connect_bd_intf_net -intf_net NOC_0_M00_AXI [get_bd_intf_pins ai_engine_0/S00_AXI] [get_bd_intf_pins axi_noc_master/M00_AXI]
 connect_bd_net -net ai_engine_0_s00_axi_aclk [get_bd_pins ai_engine_0/s00_axi_aclk] [get_bd_pins axi_noc_master/aclk9] }
 
-if { ([lsearch $temp_options "true"] != -1 )} {
-puts "INFO: lpddr4 selected"
+
+set lpddr "Include_LPDDR.VALUE"
+set use_lpddr 0
+if { [dict exists $temp_options $lpddr] } {
+    set use_lpddr [dict get $temp_options $lpddr ]
+}
+puts "INFO: use lpddr = $use_lpddr"
+if { $use_lpddr } {
+puts "INFO: adding lpddr4 "
 set_property -dict [list CONFIG.NUM_NMI {2}] [get_bd_cells axi_noc_master]
 set_property -dict [list CONFIG.CONNECTIONS {M01_INI { read_bw {5} write_bw {5}} M00_AXI { read_bw {5} write_bw {5} read_avg_burst {4} write_avg_burst {4}} M00_INI { read_bw {5} write_bw {5}} }] [get_bd_intf_pins /axi_noc_master/S00_AXI]
 set_property -dict [list CONFIG.CONNECTIONS {M01_INI { read_bw {5} write_bw {5}} M00_AXI { read_bw {5} write_bw {5} read_avg_burst {4} write_avg_burst {4}} M00_INI { read_bw {5} write_bw {5}} }] [get_bd_intf_pins /axi_noc_master/S01_AXI]
@@ -730,8 +771,14 @@ set_property -dict [list CONFIG.CONNECTIONS {M01_INI { read_bw {5} write_bw {5}}
 # MAIN FLOW
 ##################################################################
 
-create_root_design "" $design_name $options 
+# get the clock options
+set clk_options_param "Clock_Options.VALUE"
+set clk_options { clk_out1 100.000 2 false clk_out2 200.000 0 true clk_out3 300.000 1 false }
+if { [dict exists $options $clk_options_param] } {
+    set clk_options [ dict get $options $clk_options_param ]
+}
 
+create_root_design "" $design_name $options $clk_options
 	# close_bd_design [get_bd_designs $design_name]
 	# set bdDesignPath [file join [get_property directory [current_project]] [current_project].srcs sources_1 bd $design_name]
 	
@@ -750,7 +797,14 @@ create_root_design "" $design_name $options
 	set_property PFM.IRQ {intr {id 0 range 32}} [get_bd_cells /axi_intc_0]
 	set_property PFM.AXI_PORT {M00_AXI {memport "NOC_MASTER"}} [get_bd_cells /axi_noc_master]
 	
-	set_property PFM.CLOCK {clk_out1 {id "1" is_default "false" proc_sys_reset "proc_sys_reset_0" status "fixed"} clk_out2 {id "0" is_default "true" proc_sys_reset "/proc_sys_reset_1" status "fixed"} clk_out3 {id "2" is_default "false" proc_sys_reset "/proc_sys_reset_2" status "fixed"}} [get_bd_cells /clk_wizard_0]
+        set clocks {}
+        set i 0
+        foreach { port freq id is_default } $clk_options {
+            dict append clocks $port "id \"$id\" is_default \"$is_default\" proc_sys_reset \"/proc_sys_reset_$i\" status \"fixed\""
+            incr i
+        }
+	set_property PFM.CLOCK $clocks [get_bd_cells /clk_wizard_0]
+
 	set_property PFM.AXI_PORT {M01_AXI {memport "M_AXI_GP" sptag "" memory ""} M02_AXI {memport "M_AXI_GP" sptag "" memory ""} M03_AXI {memport "M_AXI_GP" sptag "" memory ""} M04_AXI {memport "M_AXI_GP" sptag "" memory ""} M05_AXI {memport "M_AXI_GP" sptag "" memory ""} M06_AXI {memport "M_AXI_GP" sptag "" memory ""} M07_AXI {memport "M_AXI_GP" sptag "" memory ""} M08_AXI {memport "M_AXI_GP" sptag "" memory ""} M09_AXI {memport "M_AXI_GP" sptag "" memory ""} M10_AXI {memport "M_AXI_GP" sptag "" memory ""} M11_AXI {memport "M_AXI_GP" sptag "" memory ""} M12_AXI {memport "M_AXI_GP" sptag "" memory ""} M13_AXI {memport "M_AXI_GP" sptag "" memory ""} M14_AXI {memport "M_AXI_GP" sptag "" memory ""} M15_AXI {memport "M_AXI_GP" sptag "" memory ""}} [get_bd_cells /smartconnect_1]
 	catch { set lpddr [get_bd_cells /axi_noc_lpddr4]
 	if { $lpddr == "/axi_noc_lpddr4" } {
