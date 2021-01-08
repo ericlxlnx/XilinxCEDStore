@@ -21,39 +21,46 @@ source -notrace "$currentDir/run.tcl"
 
 
 proc getSupportedParts {} {
-	 return ""
+    return ""
 }
 
 proc getSupportedBoards {} {
-  return [get_board_parts -filter {(BOARD_NAME =~"*vck190*" && VENDOR_NAME=="xilinx.com" ) || (BOARD_NAME =~"*vmk180*" && VENDOR_NAME=="xilinx.com" )}  -latest_file_version]
+    return [get_board_parts -filter {(BOARD_NAME =~"*vck190*" && VENDOR_NAME=="xilinx.com" ) || (BOARD_NAME =~"*vmk180*" && VENDOR_NAME=="xilinx.com" )}  -latest_file_version]
 }
 
 
 proc addOptions {DESIGNOBJ PROJECT_PARAM.BOARD_PART} {
-	lappend x [dict create name "Include_LPDDR" type "bool" value "false" enabled true]
-	return $x
+    lappend x [dict create name "Include_LPDDR" type "bool" value "false" enabled true]
+    lappend x [dict create name "Clock_Options" type "string" value "clk_out1 100.000 1 false clk_out2 200.000 0 true" enabled true]
+    return $x
 }
 
 proc addGUILayout {DESIGNOBJ PROJECT_PARAM.BOARD_PART} {
-	set designObj $DESIGNOBJ
-	set page [ced::add_page -name "Page1" -display_name "Configuration" -designObject $designObj -layout vertical]	
-	set ddr [ced::add_group -name "Versal LPDDR4 Configurations" -display_name "Versal LPDDR4 Configurations"  -parent $page -visible true -designObject $designObj ]
-	ced::add_param -name Include_LPDDR -display_name "Include_LPDDR4" -parent $ddr -designObject $designObj -widget checkbox
+    set designObj $DESIGNOBJ
+    set page [ced::add_page -name "Page1" -display_name "2020.3 Configuration" -designObject $designObj -layout vertical]
+
+    set clocks [ced::add_group -name "2020.3 Clocks" -display_name "Clocks"  -parent $page -visible true -designObject $designObj ]
+    ced::add_custom_widget -name widget_Clocks -hierParam Clock_Options -class_name PlatformClocksWidget -parent $clocks $designObj
+
+
+    set ddr [ced::add_group -name "2020.3 Versal LPDDR Configurations" -display_name "Versal LPDDR Configurations"  -parent $page -visible true -designObject $designObj ]
+    ced::add_param -name Include_LPDDR -display_name "Include_LPDDR" -parent $ddr -designObject $designObj -widget checkbox
     set imageVar [ced::add_image -name Image -parent $ddr -designObject $designObj -width 500 -height 300 -layout vertical]
+
 }
 
- updater {Include_LPDDR.VALUE} {Include_LPDDR.ENABLEMENT} {
-  if { ${Include_LPDDR.VALUE} == true } {
-     set Include_LPDDR.ENABLEMENT true
-  } else {
-	 set Include_LPDDR.ENABLEMENT true
-	 }
+updater {Include_LPDDR.VALUE} {Include_LPDDR.ENABLEMENT} {
+    if { ${Include_LPDDR.VALUE} == true } {
+        set Include_LPDDR.ENABLEMENT true
+    } else {
+        set Include_LPDDR.ENABLEMENT true
+    }
 }
 
 gui_updater {PROJECT_PARAM.BOARD_PART Include_LPDDR.VALUE} {Image.IMAGE_PATH} {
- if { ${Include_LPDDR.VALUE} == true } {
-   set Image.IMAGE_PATH "" 
-   } else {
-	 set Image.IMAGE_PATH ""
-	 }
+    if { ${Include_LPDDR.VALUE} == true } {
+        set Image.IMAGE_PATH "" 
+    } else {
+        set Image.IMAGE_PATH ""
+    }
 }
