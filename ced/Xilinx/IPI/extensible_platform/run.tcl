@@ -23,7 +23,7 @@ proc createDesign {design_name options} {
 # Procedure to create entire design; Provide argument to make
 # procedure reusable. If parentCell is "", will use root.
 
-proc create_root_design { parentCell design_name use_lpddr clk_options} {
+proc create_root_design { parentCell design_name use_lpddr clk_options irqs} {
 
 # puts "create_root_design"
 set board_part [get_property NAME [current_board_part]]
@@ -32,6 +32,11 @@ set fpga_part [get_property PART_NAME [current_board_part]]
 puts "INFO: $board_name is selected"
 puts "INFO: $board_part is selected"
 puts "INFO: $fpga_part is selected"
+
+set use_intc [ expr $irqs eq "32" ]
+set use_cascaded_irqs [ expr $irqs eq "63" ]
+puts "INFO: irqs: $irqs"
+puts "INFO: use_intc: $use_intc, use_cascaded_irqs: $use_cascaded_irqs"
 
 # Create interface ports
   set ddr4_dimm1 [ create_bd_intf_port -mode Master -vlnv xilinx.com:interface:ddr4_rtl:1.0 ddr4_dimm1 ]
@@ -400,12 +405,31 @@ puts "INFO: $fpga_part is selected"
    CONFIG.PS_WWDT0_PERIPHERAL_IO {EMIO} \
  ] $CIPS_0
 
-  # Create instance: axi_intc_0, and set properties
-  set axi_intc_0 [ create_bd_cell -type ip -vlnv xilinx.com:ip:axi_intc axi_intc_0 ]
-  set_property -dict [ list \
-   CONFIG.C_ASYNC_INTR {0xFFFFFFFF} \
-   CONFIG.C_IRQ_CONNECTION {1} \
- ] $axi_intc_0
+  if {$use_intc} {
+    puts "XXX: adding intc instance"
+    # Create instance: axi_intc_0, and set properties
+    set axi_intc_0 [ create_bd_cell -type ip -vlnv xilinx.com:ip:axi_intc axi_intc_0 ]
+    set_property -dict [ list \
+      CONFIG.C_ASYNC_INTR {0xFFFFFFFF} \
+      CONFIG.C_IRQ_CONNECTION {1} \
+    ] $axi_intc_0
+  }
+  if { $use_cascaded_irqs } {
+    set axi_intc_cascaded_1 [ create_bd_cell -type ip -vlnv xilinx.com:ip:axi_intc axi_intc_cascaded_1 ]
+    set_property -dict [ list \
+      CONFIG.C_IRQ_CONNECTION {1} \
+      CONFIG.C_ASYNC_INTR  {0xFFFFFFFF} \
+    ] $axi_intc_cascaded_1
+  
+    set axi_intc_parent [ create_bd_cell -type ip -vlnv xilinx.com:ip:axi_intc axi_intc_parent ]
+    set_property -dict [ list \
+      CONFIG.C_IRQ_CONNECTION {1} \
+      CONFIG.C_ASYNC_INTR  {0xFFFFFFFF} \
+    ] $axi_intc_parent
+ 
+    create_bd_cell -type ip -vlnv xilinx.com:ip:xlconcat:2.1 xlconcat_0
+    set_property -dict [list CONFIG.NUM_PORTS {32} CONFIG.IN0_WIDTH {1}] [get_bd_cells xlconcat_0]
+  }
 
   # Create instance: axi_noc_ddr4, and set properties
   set axi_noc_ddr4 [ create_bd_cell -type ip -vlnv xilinx.com:ip:axi_noc axi_noc_ddr4 ]
@@ -610,16 +634,18 @@ set num_clks $i
    CONFIG.USE_RESET {true} \
  ] $clk_wizard_0
 
-for {set i 0} {$i < $num_clks} {incr i} {
-  # Create instance: proc_sys_reset_N, and set properties
-  set proc_sys_reset_$i [ create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset proc_sys_reset_$i ]
-}
+  for {set i 0} {$i < $num_clks} {incr i} {
+    # Create instance: proc_sys_reset_N, and set properties
+    set proc_sys_reset_$i [ create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset proc_sys_reset_$i ]
+  }
 
   # Create instance: smartconnect_1, and set properties
+  set num_masters [ expr "$use_cascaded_irqs ? 2 : 1" ]
+  puts "XXX: num_masters: $num_masters"
   set smartconnect_1 [ create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect smartconnect_1 ]
   set_property -dict [ list \
    CONFIG.NUM_CLKS {2} \
-   CONFIG.NUM_MI {1} \
+   CONFIG.NUM_MI $num_masters \
    CONFIG.NUM_SI {1} \
  ] $smartconnect_1
 
@@ -636,7 +662,16 @@ for {set i 0} {$i < $num_clks} {incr i} {
   connect_bd_intf_net -intf_net NOC_Master_M00_INI [get_bd_intf_pins axi_noc_ddr4/S00_INI] [get_bd_intf_pins axi_noc_master/M00_INI]
   connect_bd_intf_net -intf_net axi_noc_0_CH0_DDR4_0 [get_bd_intf_ports ddr4_dimm1] [get_bd_intf_pins axi_noc_ddr4/CH0_DDR4_0]
   connect_bd_intf_net -intf_net ddr4_dimm1_sma_clk_1 [get_bd_intf_ports ddr4_dimm1_sma_clk] [get_bd_intf_pins axi_noc_ddr4/sys_clk0]
-  connect_bd_intf_net -intf_net smartconnect_1_M00_AXI [get_bd_intf_pins axi_intc_0/s_axi] [get_bd_intf_pins smartconnect_1/M00_AXI]
+  if { $use_intc } {
+    puts "XXX: connecting intc pins"
+    connect_bd_intf_net -intf_net smartconnect_1_M00_AXI [get_bd_intf_pins axi_intc_0/s_axi] [get_bd_intf_pins smartconnect_1/M00_AXI]
+  }
+  if { $use_cascaded_irqs } {
+    puts "XXX: connecting cascaded interrupt pins"
+    #connect_bd_intf_net -intf_net smartconnect_1_M00_AXI [get_bd_intf_pins axi_intc_cascaded_1/s_axi] [get_bd_intf_pins axi_intc_parent/s_axi] [get_bd_intf_pins smartconnect_1/M00_AXI]
+    connect_bd_intf_net -intf_net smartconnect_1_M00_AXI [get_bd_intf_pins axi_intc_cascaded_1/s_axi] [get_bd_intf_pins smartconnect_1/M00_AXI]
+    connect_bd_intf_net -intf_net smartconnect_1_M01_AXI [get_bd_intf_pins axi_intc_parent/s_axi] [get_bd_intf_pins smartconnect_1/M01_AXI]
+  }
 
   # Create port connections
   connect_bd_net -net CIPS_0_pl_clk0 [get_bd_pins CIPS_0/pl0_ref_clk] [get_bd_pins clk_wizard_0/clk_in1]
@@ -655,11 +690,26 @@ for {set i 0} {$i < $num_clks} {incr i} {
   connect_bd_net -net CIPS_0_ps_ps_noc_nci_axi0_clk [get_bd_pins CIPS_0/fpd_axi_noc_axi0_clk] [get_bd_pins axi_noc_master/aclk5]
   connect_bd_net -net CIPS_0_ps_ps_noc_nci_axi1_clk [get_bd_pins CIPS_0/fpd_axi_noc_axi1_clk] [get_bd_pins axi_noc_master/aclk6]
   connect_bd_net -net CIPS_0_ps_ps_noc_rpu_axi0_clk [get_bd_pins CIPS_0/lpd_axi_noc_clk] [get_bd_pins axi_noc_master/aclk7]
-  connect_bd_net -net axi_intc_0_irq [get_bd_pins CIPS_0/pl_ps_irq0] [get_bd_pins axi_intc_0/irq]
+  if { $use_intc } {
+    connect_bd_net -net axi_intc_0_irq [get_bd_pins CIPS_0/pl_ps_irq0] [get_bd_pins axi_intc_0/irq]
+  }
+  if { $use_cascaded_irqs } {
+    connect_bd_net [get_bd_pins axi_intc_cascaded_1/irq] [get_bd_pins xlconcat_0/In31]
+    connect_bd_net [get_bd_pins axi_intc_parent/intr] [get_bd_pins xlconcat_0/dout]
+
+    connect_bd_net -net axi_intc_0_irq [get_bd_pins CIPS_0/pl_ps_irq0] [get_bd_pins axi_intc_parent/irq]
+  }
 
   set default_clock_net clk_wizard_0_$default_clk_port
 
-  connect_bd_net -net $default_clock_net [get_bd_pins CIPS_0/m_axi_fpd_aclk] [get_bd_pins axi_intc_0/s_axi_aclk] [get_bd_pins axi_noc_master/aclk0] [get_bd_pins smartconnect_1/aclk] [get_bd_pins smartconnect_1/aclk1]
+  connect_bd_net -net $default_clock_net [get_bd_pins CIPS_0/m_axi_fpd_aclk] [get_bd_pins axi_noc_master/aclk0] [get_bd_pins smartconnect_1/aclk] [get_bd_pins smartconnect_1/aclk1]
+  if { $use_intc } {
+    connect_bd_net -net $default_clock_net [get_bd_pins axi_intc_0/s_axi_aclk]
+  }
+  if { $use_cascaded_irqs } {
+    connect_bd_net -net $default_clock_net [get_bd_pins axi_intc_cascaded_1/s_axi_aclk]
+    connect_bd_net -net $default_clock_net [get_bd_pins axi_intc_parent/s_axi_aclk]
+  }
 
   for {set i 0} {$i < $num_clks} {incr i} {
     set port [lindex $clk_ports $i]
@@ -671,7 +721,14 @@ for {set i 0} {$i < $num_clks} {incr i} {
     connect_bd_net -net clk_wizard_0_locked [get_bd_pins proc_sys_reset_$i/dcm_locked] 
   }
 
-  connect_bd_net -net proc_sys_reset_${default_clk_num}_peripheral_aresetn [get_bd_pins axi_intc_0/s_axi_aresetn] [get_bd_pins proc_sys_reset_${default_clk_num}/peripheral_aresetn] [get_bd_pins smartconnect_1/aresetn]
+  connect_bd_net -net proc_sys_reset_${default_clk_num}_peripheral_aresetn [get_bd_pins proc_sys_reset_${default_clk_num}/peripheral_aresetn] [get_bd_pins smartconnect_1/aresetn]
+  if { $use_intc } {
+    connect_bd_net -net proc_sys_reset_${default_clk_num}_peripheral_aresetn [get_bd_pins axi_intc_0/s_axi_aresetn]
+  }
+  if { $use_cascaded_irqs } {
+    connect_bd_net -net proc_sys_reset_${default_clk_num}_peripheral_aresetn [get_bd_pins axi_intc_cascaded_1/s_axi_aresetn]
+    connect_bd_net -net proc_sys_reset_${default_clk_num}_peripheral_aresetn [get_bd_pins axi_intc_parent/s_axi_aresetn]
+  }
 
 if [regexp "vck" $board_name] {
 
@@ -777,7 +834,14 @@ if { [dict exists $options $lpddr] } {
     set use_lpddr [dict get $options $lpddr ]
 }
 
-create_root_design "" $design_name $use_lpddr $clk_options
+# 0 (no interrupts) / 32 (interrupt controller) / 63 (interrupt controller + cascade block)
+set irqs_param "IRQS.VALUE"
+set irqs 32
+if { [dict exists $options $irqs_param] } {
+    set irqs [dict get $options $irqs_param ]
+}
+
+create_root_design "" $design_name $use_lpddr $clk_options $irqs
 	# close_bd_design [get_bd_designs $design_name]
 	# set bdDesignPath [file join [get_property directory [current_project]] [current_project].srcs sources_1 bd $design_name]
 	
@@ -788,12 +852,23 @@ create_root_design "" $design_name $use_lpddr $clk_options
 	# Create PFM attributes
 
 	if [regexp "vmk" $board_name] {
-	puts "INFO: Creating extensible_platform for VMK_180"
-	set_property PFM_NAME {xilinx.com:xd:xilinx_vmk180_base:1.0} [get_files [current_bd_design].bd]
+	  puts "INFO: Creating extensible_platform for VMK_180"
+	  set_property PFM_NAME {xilinx.com:xd:xilinx_vmk180_base:1.0} [get_files [current_bd_design].bd]
 	} else {
-	puts "INFO: Creating extensible_platform for VCK_190"
-	set_property PFM_NAME {xilinx.com:xd:xilinx_vck190_base:1.0} [get_files [current_bd_design].bd] }
-	set_property PFM.IRQ {intr {id 0 range 32}} [get_bd_cells /axi_intc_0]
+	  puts "INFO: Creating extensible_platform for VCK_190"
+	  set_property PFM_NAME {xilinx.com:xd:xilinx_vck190_base:1.0} [get_files [current_bd_design].bd]
+        }
+
+        if { $irqs eq "32" } {
+	  set_property PFM.IRQ {intr {id 0 range 32}} [get_bd_cells /axi_intc_0]
+        }
+        if { $irqs eq "63" } {
+	  set_property PFM.IRQ {intr {id 0 range 32}} [get_bd_cells /axi_intc_cascaded_1]
+          set_property PFM.IRQ {In0 {id 32} In1 {id 33} In2 {id 34} In3 {id 35} In4 {id 36} In5 {id 37} In6 {id 38} In7 {id 39} In8 {id 40} \
+                                 In9 {id 41} In10 {id 42} In11 {id 43} In12 {id 44} In13 {id 45} In14 {id 46} In15 {id 47} In16 {id 48} In17 {id 49} In18 {id 50} \
+                                 In19 {id 51} In20 {id 52} In21 {id 53} In22 {id 54} In23 {id 55} In24 {id 56} In25 {id 57} In26 {id 58} In27 {id 59} In28 {id 60} \
+                                 In29 {id 61} In30 {id 62}} [get_bd_cells /xlconcat_0]
+        }
 	set_property PFM.AXI_PORT {M00_AXI {memport "NOC_MASTER"}} [get_bd_cells /axi_noc_master]
 	
         set clocks {}
