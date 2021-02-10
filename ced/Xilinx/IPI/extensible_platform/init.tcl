@@ -34,7 +34,7 @@ proc addOptions {DESIGNOBJ PROJECT_PARAM.BOARD_PART} {
     lappend x [dict create name "Clock_Options" type "string" value "clk_out1 200.000 0 true clk_out2 100.000 1 false" enabled true]
     lappend x [dict create name "IRQS" type "string" value "32" value_list {"0 No_interrupts" "32 32_Interrupts,_single_interrupt_controller" "63 63_interrupts,_cascaded_interrupt_controller"} enabled true]
     #set components [ get_board_components -of_objects [get_boards ${PROJECT_PARAM.BOARD_PART}] ]
-    ##get list of board components based on board part
+    #get list of board components based on board part
     #set value {}
     #foreach { comp } $components {
     #    lappend value $comp
@@ -56,7 +56,7 @@ proc addGUILayout {DESIGNOBJ PROJECT_PARAM.BOARD_PART} {
     puts "PROJECT_PARAM.BOARD_PART: ${PROJECT_PARAM.BOARD_PART}"
 
     set ddr [ced::add_group -name "Versal LPDDR Configurations" -display_name "Versal LPDDR Configurations"  -parent $page -visible true -designObject $designObj ]
-    ced::add_param -name Include_LPDDR -display_name "Include_LPDDR" -parent $ddr -designObject $designObj -widget checkbox
+    ced::add_param -name Include_LPDDR -display_name "Include LPDDR" -parent $ddr -designObject $designObj -widget checkbox
 
     #set ip [ced::add_group -name "Board_Components" -display_name "Board Components"  -parent $page -visible true -designObject $designObj ]
     #ced::add_custom_widget -name widget_IP -hierParam IP_Options -class_name PlatformIPWidget -parent $ip $designObj
@@ -66,12 +66,70 @@ proc addGUILayout {DESIGNOBJ PROJECT_PARAM.BOARD_PART} {
 }
 
 # validater { parameters_used } { parameters_modified} { functionality }
-validater { Clock_Options.VALUE } {
-    puts "XXX validate"
-    puts "XXX clock options = ${Clock_Options.VALUE}"
-    #puts "XXX clock options = ${PARAM_VALUE.Clock_Options}"
-    set_property errmsg "This here is an error message" ${PARAM_VALUE.Clock_Options}
-    return false; # good
+validater { Clock_Options.VALUE } { Clock_Options.ERRMSG } {
+    puts "XXX validate: clock options = ${Clock_Options.VALUE}"
+
+    set clk_options ${Clock_Options.VALUE}
+    set clk_ports {}
+    set clk_freqs {}
+    set clk_ids {}
+    set clk_defaults {}
+
+    set i 0
+    foreach { port freq id is_default } $clk_options {
+        lappend clk_ports $port
+        lappend clk_freqs $freq
+        lappend clk_ids $id
+        lappend clk_defaults $is_default
+        incr i
+    }
+
+    # check for well-formed port names
+    foreach { port } [ lsort -unique $clk_ports ] {
+        set result [regexp -nocase -- {^[a-z0-9_]+$} $port]
+        if { !$result } {
+            puts "The clock port name must be alphanumeric: $port"
+        }
+    }
+
+    # check for repeated clock ports
+    foreach { port } [ lsort -unique $clk_ports ] {
+        set count [llength [lsearch -all $clk_ports $port]]
+        if { $count > 1 } {
+            puts "The clock port name is not unique: $port"
+        }
+    }
+
+    # check for repeated clock ids
+    foreach { id } [ lsort -unique $clk_ids ] {
+        set count [llength [lsearch -all $clk_ids $id]]
+        if { $count > 1 } {
+            puts "Clock ID is not unique: $id"
+        }
+    }
+
+    # check for repeated clock frequencies
+    # UI enforces formatting (100 vs 100.000) so we can use direct string compare
+    foreach { freq } [ lsort -unique $clk_freqs ] {
+        set count [llength [lsearch -all $clk_freqs $freq]]
+        if { $count > 1 } {
+            puts "Clock frequency used more than once: $freq"
+        }
+    }
+
+    # check for min/max freqs. per clocking wizard 6.0 docs PG065, this is 10-1066 MHz
+    foreach { freq } $clk_freqs {
+        if { [expr $freq < 10 || $freq > 1066] } {
+            puts "Clock frequency $freq out of range. It must be between 10-1066 MHz."
+        }
+    }
+
+    # check for exactly one default clock
+    if {[ lsearch $clk_defaults true ] == -1} {
+        puts "No default clock is selected."
+    } elseif {[llength [lsearch -all $clk_defaults true]] > 1} {
+        puts "Multiple default clocks are selected. There can be only one default clock."
+    }
 }
 
 updater {Include_LPDDR.VALUE} {Include_LPDDR.ENABLEMENT} {
